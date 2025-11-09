@@ -1,16 +1,24 @@
 # Informe Técnico de Integración
 ## Sistema de Trading de Futuros en Binance - Consolidación Local
 
-**Fecha:** 2025-11-09  
-**Rama:** `claude/futures-bot-integration-complete-011CUxpfmUdjY6rLhFLUU3Sy`  
-**Objetivo:** Consolidar el bot para ejecución local estable en Windows 10/11 con Binance Testnet  
+**Fecha:** 2025-11-09
+**Rama:** `claude/futures-bot-integration-complete-011CUxpfmUdjY6rLhFLUU3Sy`
+**Objetivo:** Consolidar el bot para ejecución local estable en Windows 10/11 con Binance Testnet
 **Estado:** ✅ **COMPLETADO**
+
+> **📝 NOTA DE INTEGRACIÓN (2025-11-09):**
+> Este informe documenta la arquitectura core (`main_trading_system.py` y componentes `core/`).
+> Para **ejecutar el sistema completo**, utiliza el orquestador **`run_integrated_bot.py`**, que integra
+> la arquitectura moderna (core/) con el bot legacy (binance_bot_2.py) y ofrece modos headless/GUI.
+> Ver **README.md** sección "🚀 Punto de Entrada: run_integrated_bot.py" para detalles completos.
 
 ---
 
 ## 1. Resumen Ejecutivo
 
 Se ha consolidado exitosamente el sistema de trading como un **entrypoint único** (`main_trading_system.py`) con API pública completa, integración de confluence engine, y capacidad de ejecutarse localmente en Windows sin servidor. El sistema tolera correctamente el estado de "0 estrategias válidas" como no-trade, y la estrategia SMC está protegida contra IndexError con datos insuficientes.
+
+**IMPORTANTE:** Para ejecución práctica del sistema completo, usa `run_integrated_bot.py` como wrapper de integración entre `main_trading_system.py` (core) y `binance_bot_2.py` (legacy). Este wrapper inyecta ModernComponentsBridge, RobustOrderExecutor, PyramidingManager y RegimeFilter en el bot legacy, unificando ambas arquitecturas.
 
 ### Criterios de Aceptación - CUMPLIDOS
 

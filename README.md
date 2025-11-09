@@ -253,7 +253,175 @@ system = TradingSystem(testnet=False, ...)
 - Fondos reales
 - ⚠️ Solo usar tras validación exhaustiva en Testnet
 
-## 💻 Uso
+## 🚀 Punto de Entrada: run_integrated_bot.py
+
+**`run_integrated_bot.py` es el orquestador principal del sistema**, integrando todos los componentes modernos (arquitectura 3.0) con el bot legacy (`binance_bot_2.py`).
+
+### Modos de Ejecución
+
+#### 1. **Modo Headless (Sin GUI)**
+
+Ejecuta el bot en modo servidor sin interfaz gráfica:
+
+```bash
+python run_integrated_bot.py
+```
+
+**Características:**
+- Trading automático 24/7
+- Logs en consola y archivos
+- Ideal para VPS/servidores
+- Detener con `Ctrl+C`
+
+#### 2. **Modo GUI Moderna**
+
+Ejecuta con la interfaz gráfica moderna (`ModernTradingGUI`):
+
+```bash
+python run_integrated_bot.py --gui
+```
+
+**Características:**
+- Panel de control responsivo
+- Configuración dinámica (symbol, timeframe, risk profile)
+- Visualización de estado en tiempo real
+- Display de régimen de mercado
+- Logs integrados
+- Botones Start/Stop/Kill-Switch
+
+#### 3. **Modo GUI Legacy**
+
+Ejecuta con la interfaz gráfica original de `binance_bot_2.py`:
+
+```bash
+python run_integrated_bot.py --legacy-gui
+```
+
+**Características:**
+- GUI clásica de TradingBotGUI
+- Compatible con versiones anteriores
+- Para usuarios familiarizados con la interfaz original
+
+### Flags Disponibles
+
+| Flag | Descripción |
+|------|-------------|
+| `--gui` | Ejecuta con GUI moderna (ModernTradingGUI) |
+| `--legacy-gui` | Ejecuta con GUI legacy (TradingBotGUI) |
+| (sin flags) | Ejecuta en modo headless |
+
+### Arquitectura de Integración
+
+`run_integrated_bot.py` funciona como **wrapper** que:
+
+1. **Inicializa bot legacy** (`binance_bot_2.py`)
+2. **Inyecta componentes modernos**:
+   - `ModernComponentsBridge` (EventBus, StateStore, OrderRegistry, ConnectionManager)
+   - `RobustOrderExecutor` (reintentos con backoff exponencial)
+   - `PyramidingManager` (gestión de piramidación)
+   - `RegimeFilter` (filtrado por regímenes de mercado)
+3. **Conecta componentes**: Event bus, alert manager, logger system
+4. **Parchea trading loop**: Añade circuit breakers, regime updates, pyramiding checks
+5. **Reconcilia estado** al arranque
+
+### Ejemplo de Inicialización Completa
+
+```python
+from run_integrated_bot import IntegratedTradingBot
+
+# Crear bot integrado
+bot = IntegratedTradingBot(use_modern_gui=False)
+
+# Inicializar todos los componentes
+if bot.initialize():
+    print("✅ Sistema inicializado")
+
+    # Verificar estado
+    status = bot.get_status()
+    print(f"Balance: ${status['balance']:.2f}")
+    print(f"Circuit Breaker: {status['circuit_breaker']}")
+    print(f"Regime: {status['regime']}")
+
+    # Iniciar trading
+    bot.start()
+
+    # ... mantener vivo ...
+
+    # Detener
+    bot.stop()
+else:
+    print("❌ Error al inicializar")
+```
+
+### Salida de Inicialización
+
+Al ejecutar `run_integrated_bot.py`, verás:
+
+```
+======================================================================
+TRADING BOT - Arquitectura 3.0 Integrada
+======================================================================
+
+[1/5] Inicializando bot legacy...
+✓ python-binance validation passed (ThreadedWebsocketManager available)
+  ✓ Bot legacy inicializado
+
+[2/5] Inicializando ModernComponentsBridge...
+  ✓ ModernComponentsBridge inicializado
+  ✓ Reconciliación completada
+
+[3/5] Inicializando RegimeFilter...
+  ✓ RegimeFilter inicializado
+
+[4/5] Inicializando Pyramiding Manager...
+  ✓ PyramidingManager inicializado (max 2 adds)
+
+[5/5] Integrando RobustOrderExecutor...
+  ✓ RobustOrderExecutor integrado en OrderManager
+
+======================================================================
+✅ SISTEMA COMPLETAMENTE INTEGRADO
+======================================================================
+  Symbol: BTCUSDT
+  Timeframe: 5m
+  Mode: TESTNET
+  Circuit Breakers: ON
+  Regime Filter: ON
+  Pyramiding: ON
+  Alerts: Telegram, Discord, Email
+======================================================================
+```
+
+### Validación de Dependencias
+
+**IMPORTANTE**: `run_integrated_bot.py` depende de `binance_bot_2.py`, que valida automáticamente:
+
+✅ **python-binance==1.0.19** está instalado
+❌ **binance-connector** NO debe estar instalado (conflicto de namespace)
+✅ **ThreadedWebsocketManager** está disponible
+
+Si detecta conflictos, el bot aborta con:
+```
+======================================================================
+ERROR: El módulo 'binance' instalado NO es python-binance.
+======================================================================
+Probablemente tienes binance-connector instalado, que expone un
+módulo 'binance' incompatible que shadow las clases esperadas.
+
+SOLUCIÓN:
+  1. pip uninstall binance-connector binance
+  2. pip install python-binance==1.0.19
+
+CAUSA: binance-connector y python-binance no pueden coexistir
+porque ambos exponen el namespace 'binance'.
+======================================================================
+```
+
+**Ver `requirements.txt` para más detalles sobre dependencias.**
+
+## 💻 Uso Avanzado (API Interna)
+
+Si prefieres usar la API interna de `main_trading_system.py` directamente (sin el wrapper):
 
 ### Inicialización Básica
 

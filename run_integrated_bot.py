@@ -55,6 +55,39 @@ class IntegratedTradingBot:
     def initialize(self):
         """Inicializar todos los componentes"""
 
+        # ===== VALIDACIÓN TEMPRANA DE CREDENCIALES =====
+        print("\n[0/5] Validando credenciales...")
+
+        if not Config.API_KEY or Config.API_KEY.strip() == '':
+            print("\n" + "="*70)
+            print("❌ ERROR: BINANCE_API_KEY no está configurada")
+            print("="*70)
+            print("\nSOLUCIÓN:")
+            print("  1. Crea un archivo .env en el directorio raíz")
+            print("  2. Añade: BINANCE_API_KEY=tu_api_key_aqui")
+            print("  3. Añade: BINANCE_SECRET_KEY=tu_secret_key_aqui")
+            print("\nPara obtener credenciales:")
+            print("  Testnet: https://testnet.binancefuture.com/")
+            print("  Mainnet: https://www.binance.com/en/my/settings/api-management")
+            print("="*70 + "\n")
+            return False
+
+        if not Config.SECRET_KEY or Config.SECRET_KEY.strip() == '':
+            print("\n" + "="*70)
+            print("❌ ERROR: BINANCE_SECRET_KEY no está configurada")
+            print("="*70)
+            print("\nSOLUCIÓN:")
+            print("  1. Crea un archivo .env en el directorio raíz")
+            print("  2. Añade: BINANCE_API_KEY=tu_api_key_aqui")
+            print("  3. Añade: BINANCE_SECRET_KEY=tu_secret_key_aqui")
+            print("\nPara obtener credenciales:")
+            print("  Testnet: https://testnet.binancefuture.com/")
+            print("  Mainnet: https://www.binance.com/en/my/settings/api-management")
+            print("="*70 + "\n")
+            return False
+
+        print("  ✓ Credenciales validadas (API_KEY y SECRET_KEY presentes)")
+
         print("\n[1/5] Inicializando bot legacy...")
 
         # Crear bot legacy
@@ -339,27 +372,43 @@ class IntegratedTradingBot:
             self.legacy_bot.stop()
 
     def get_status(self) -> dict:
-        """Obtener estado del bot"""
+        """Obtener estado del bot con información completa"""
 
         status = {
             'balance': 0.0,
             'position': None,
             'pnl_usdt': 0.0,
             'pnl_pct': 0.0,
-            'circuit_breaker': {'paused': False},
+            'circuit_breaker': {'paused': False, 'reason': None},
             'regime': None,
             'total_trades': 0,
             'win_rate': 0.0,
-            'uptime_seconds': 0
+            'uptime_seconds': 0,
+            'open_orders': [],
+            'is_running': False
         }
 
         try:
+            # Estado de ejecución
+            if self.legacy_bot:
+                status['is_running'] = self.legacy_bot.is_running
+
+            # Balance
+            if self.legacy_bot and hasattr(self.legacy_bot, 'client'):
+                try:
+                    account_info = self.legacy_bot.client.futures_account()
+                    status['balance'] = float(account_info.get('totalWalletBalance', 0.0))
+                except Exception as e:
+                    # Si falla, intentar balance simple
+                    if hasattr(self.legacy_bot, 'balance'):
+                        status['balance'] = float(self.legacy_bot.balance)
+
             # Circuit breaker
             if self.modern_bridge:
                 can_trade, reason = self.modern_bridge.can_trade()
                 status['circuit_breaker'] = {
                     'paused': not can_trade,
-                    'reason': reason
+                    'reason': reason if not can_trade else None
                 }
 
             # Régimen
@@ -367,15 +416,118 @@ class IntegratedTradingBot:
                 regime_summary = self.regime_filter.get_regime_summary()
                 status['regime'] = regime_summary
 
-            # Posición
+            # Posición y PnL
             if self.legacy_bot and self.legacy_bot.order_manager:
                 if self.legacy_bot.order_manager.current_position_data:
-                    status['position'] = self.legacy_bot.order_manager.current_position_data
+                    position = self.legacy_bot.order_manager.current_position_data
+                    status['position'] = position
+
+                    # Calcular PnL si hay posición
+                    try:
+                        entry_price = float(position.get('entry_price', 0))
+                        quantity = float(position.get('quantity', 0))
+                        side = position.get('side', 'BUY')
+
+                        # Obtener precio actual
+                        current_price = 0.0
+                        if hasattr(self.legacy_bot, 'client'):
+                            ticker = self.legacy_bot.client.futures_symbol_ticker(symbol=Config.SYMBOL)
+                            current_price = float(ticker.get('price', 0))
+
+                        if current_price > 0 and entry_price > 0 and quantity > 0:
+                            # Calcular PnL
+                            if side == 'BUY':
+                                pnl_usdt = (current_price - entry_price) * quantity
+                            else:  # SELL
+                                pnl_usdt = (entry_price - current_price) * quantity
+
+                            status['pnl_usdt'] = pnl_usdt
+                            status['pnl_pct'] = (pnl_usdt / (entry_price * quantity)) * 100
+
+                    except Exception as e:
+                        pass  # PnL no disponible
+
+                # Órdenes abiertas
+                try:
+                    if hasattr(self.legacy_bot, 'client'):
+                        open_orders = self.legacy_bot.client.futures_get_open_orders(symbol=Config.SYMBOL)
+                        status['open_orders'] = [
+                            {
+                                'orderId': order.get('orderId'),
+                                'type': order.get('type'),
+                                'side': order.get('side'),
+                                'price': float(order.get('price', 0)),
+                                'quantity': float(order.get('origQty', 0)),
+                                'status': order.get('status')
+                            }
+                            for order in open_orders
+                        ]
+                except Exception as e:
+                    pass  # Órdenes no disponibles
+
+            # Estadísticas de trading
+            if self.legacy_bot and hasattr(self.legacy_bot, 'trade_history'):
+                trades = self.legacy_bot.trade_history
+                status['total_trades'] = len(trades)
+
+                if trades:
+                    winning_trades = sum(1 for t in trades if t.get('pnl', 0) > 0)
+                    status['win_rate'] = (winning_trades / len(trades)) * 100
+
+            # Uptime
+            if self.legacy_bot and hasattr(self.legacy_bot, 'start_time'):
+                import time
+                status['uptime_seconds'] = int(time.time() - self.legacy_bot.start_time)
 
         except Exception as e:
             print(f"Error getting status: {e}")
+            import traceback
+            traceback.print_exc()
 
         return status
+
+    def update_config(self, config: Dict[str, Any]) -> bool:
+        """
+        Actualizar configuración dinámica del bot.
+
+        Args:
+            config: Dict con keys: symbol, timeframe, risk_profile, testnet
+
+        Returns:
+            True si la actualización fue exitosa, False en caso contrario
+        """
+        try:
+            # Validar que el bot esté detenido antes de actualizar
+            if self.legacy_bot and self.legacy_bot.is_running:
+                print("⚠️ Cannot update config while bot is running. Stop first.")
+                return False
+
+            # Actualizar Config global
+            if 'symbol' in config:
+                Config.SYMBOL = config['symbol']
+
+            if 'timeframe' in config:
+                Config.TIMEFRAME = config['timeframe']
+
+            if 'risk_profile' in config:
+                # Mapear string a RiskProfile
+                profile_map = {
+                    'Conservador': RiskProfile.CONSERVATIVE,
+                    'Normal': RiskProfile.NORMAL,
+                    'Agresivo': RiskProfile.AGGRESSIVE
+                }
+                if config['risk_profile'] in profile_map:
+                    Config.RISK_PROFILE = profile_map[config['risk_profile']]
+
+            if 'testnet' in config:
+                Config.USE_TESTNET = config['testnet']
+
+            print(f"✅ Configuration updated: {config}")
+            return True
+
+        except Exception as e:
+            print(f"❌ Error updating config: {e}")
+            return False
 
     def run_with_gui(self):
         """Ejecutar con GUI moderna"""
@@ -385,11 +537,12 @@ class IntegratedTradingBot:
             print("Failed to initialize")
             return
 
-        # Crear GUI
+        # Crear GUI con callback de configuración
         gui = ModernTradingGUI(
             start_callback=self.start,
             stop_callback=self.stop,
-            get_status_callback=self.get_status
+            get_status_callback=self.get_status,
+            update_config_callback=self.update_config
         )
 
         # Conectar logger
@@ -455,9 +608,22 @@ def main():
             print("Failed to initialize")
             return
 
-        # Usar GUI legacy
-        gui = TradingBotGUI(bot.legacy_bot)
-        gui.run()
+        # Crear root de Tkinter y GUI legacy con bot integrado
+        root = tk.Tk()
+        gui = TradingBotGUI(root, bot=bot.legacy_bot)
+
+        # Configurar cierre limpio
+        def on_closing():
+            if hasattr(gui, 'on_closing'):
+                gui.on_closing()
+            else:
+                bot.stop()
+                root.destroy()
+
+        root.protocol("WM_DELETE_WINDOW", on_closing)
+
+        # Ejecutar mainloop
+        root.mainloop()
 
     else:
         # Headless

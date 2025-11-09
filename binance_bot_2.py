@@ -45,8 +45,65 @@ except ImportError:
 
 from scipy import signal
 from scipy.stats import spearmanr
+
+# ==========================================
+# VALIDACIÓN DE DEPENDENCIA: python-binance
+# ==========================================
+# Este bot requiere python-binance==1.0.19 (no binance-connector)
+# binance-connector expone un módulo 'binance' incompatible que shadow
+# las clases Client y ThreadedWebsocketManager esperadas por este código.
+
+try:
+    import binance
+    # Verificar que el módulo tiene las clases esperadas
+    if not hasattr(binance, 'Client') and not hasattr(binance, 'client'):
+        raise ImportError(
+            "\n" + "="*70 + "\n"
+            "ERROR: El módulo 'binance' instalado NO es python-binance.\n"
+            "="*70 + "\n"
+            "Probablemente tienes binance-connector instalado, que expone un\n"
+            "módulo 'binance' incompatible que shadow las clases esperadas.\n\n"
+            "SOLUCIÓN:\n"
+            "  1. pip uninstall binance-connector binance\n"
+            "  2. pip install python-binance==1.0.19\n\n"
+            "CAUSA: binance-connector y python-binance no pueden coexistir\n"
+            "porque ambos exponen el namespace 'binance'.\n"
+            "="*70
+        )
+
+    # Intentar importar ThreadedWebsocketManager como prueba adicional
+    try:
+        from binance import ThreadedWebsocketManager
+        _twsm_test = ThreadedWebsocketManager  # Verificar que no es None
+    except (ImportError, AttributeError) as e:
+        raise ImportError(
+            "\n" + "="*70 + "\n"
+            f"ERROR: No se pudo importar ThreadedWebsocketManager: {e}\n"
+            "="*70 + "\n"
+            "Esto indica que el módulo 'binance' instalado NO es python-binance==1.0.19.\n\n"
+            "SOLUCIÓN:\n"
+            "  1. pip uninstall binance-connector binance\n"
+            "  2. pip install python-binance==1.0.19\n"
+            "="*70
+        )
+
+except ImportError as e:
+    if "No module named 'binance'" in str(e) or "No module named" in str(e):
+        raise ImportError(
+            "\n" + "="*70 + "\n"
+            "ERROR: python-binance no está instalado.\n"
+            "="*70 + "\n"
+            "SOLUCIÓN:\n"
+            "  pip install python-binance==1.0.19\n"
+            "="*70
+        )
+    else:
+        raise  # Re-raise si es otro tipo de ImportError ya formateado
+
+# Si llegamos aquí, la validación pasó
+print("✓ python-binance validation passed (ThreadedWebsocketManager available)")
+
 from binance.client import Client
-from binance import ThreadedWebsocketManager
 from binance.exceptions import BinanceAPIException
 from enum import Enum
 from collections import deque
@@ -3462,18 +3519,31 @@ class TradingBot:
 
 class TradingBotGUI:
     """Interfaz gráfica profesional para el bot de trading"""
-    
-    def __init__(self, root):
+
+    def __init__(self, root, bot=None):
+        """
+        Args:
+            root: tk.Tk() root window
+            bot: (Opcional) TradingBot instance. Si None, crea uno nuevo.
+        """
         self.root = root
         self.root.title("Bot de Trading Algorítmico - Binance Futures")
         self.root.geometry("1200x800")
-        
+
         # Queue para comunicación entre threads
         self.message_queue = queue.Queue()
-        
+
         # Bot instance con queue
-        self.bot = TradingBot(message_queue=self.message_queue)
-        
+        if bot is not None:
+            # Usar bot provisto (ej. desde IntegratedTradingBot)
+            self.bot = bot
+            # Conectar message_queue si el bot no tiene uno
+            if not hasattr(self.bot, 'message_queue') or self.bot.message_queue is None:
+                self.bot.message_queue = self.message_queue
+        else:
+            # Crear bot nuevo (comportamiento legacy)
+            self.bot = TradingBot(message_queue=self.message_queue)
+
         self.setup_gui()
         self.check_queue()
         
