@@ -1,0 +1,4 @@
+2025-11-09 15:17:52 | INFO | TradingBot | Cliente inicializado en TESTNET (cliente estándar)
+2025-11-09 15:17:52 | INFO | TradingBot | Diferencia de tiempo con servidor: 93ms
+2025-11-09 15:17:52 | WARNING | TradingBot | No se pudo configurar apalancamiento: API Secret required for private endpoints
+2025-11-09 15:17:54 | SUCCESS | TradingBot.OrderPrecision | Precisión cargada - Precio: 1 decimales, Cantidad: 3 decimales, Min Notional: $100.0

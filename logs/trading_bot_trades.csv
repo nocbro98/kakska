@@ -1,0 +1,1 @@
+timestamp,symbol,side,entry_price,exit_price,quantity,pnl_usdt,pnl_pct,strategy,confidence,risk_profile,mode,risk_usdt,risk_pct,rr_ratio,duration_minutes,max_drawdown_pct,funding_paid,elliott_signal,elliott_conf,fibonacci_signal,fibonacci_conf,wyckoff_signal,wyckoff_conf,smc_signal,smc_conf
