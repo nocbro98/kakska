@@ -15,7 +15,7 @@ import logging
 import threading
 from datetime import datetime
 from enum import Enum
-from queue import Queue, Full
+from queue import Queue, Full, Empty
 from typing import Callable, Dict, List, Any, Optional
 from dataclasses import dataclass
 
@@ -255,6 +255,10 @@ class EventBus:
 
                 with self._stats_lock:
                     self._stats['events_processed'] += 1
+
+            except Empty:
+                # Cola vacía es estado normal, no loguear
+                continue
 
             except Exception as e:
                 if self._running:  # Solo loguear si no es shutdown
