@@ -1,7 +1,7 @@
 # Trading System Requirements
 
 # Binance API
-binance-connector==3.6.1
+binance-connector==3.12.0
 python-binance==1.0.19
 
 # Data Processing
