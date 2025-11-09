@@ -170,31 +170,88 @@ uwu/
 └── README.md                     # Este archivo
 ```
 
-## 🚀 Instalación
+## 🚀 Instalación y Configuración
 
-### Requisitos
+### Paso 1: Instalar Dependencias
+
 ```bash
-pip install binance-connector pandas numpy talib scipy
+pip install -r requirements.txt
 ```
 
-### Configuración
+**Nota:** Si tienes problemas instalando TA-Lib, consulta la [guía oficial](https://github.com/mrjbq7/ta-lib#installation).
 
-1. **Variables de Entorno:**
+### Paso 2: Configurar Credenciales
+
+1. **Copiar archivo de ejemplo:**
 ```bash
-export BINANCE_API_KEY="tu_api_key"
-export BINANCE_SECRET_KEY="tu_secret_key"
+cp .env.example .env
 ```
 
-2. **Testnet vs Mainnet:**
+2. **Editar `.env` con tus credenciales:**
+```bash
+# Obtén tus credenciales en:
+# Testnet: https://testnet.binancefuture.com/
+# Mainnet: https://www.binance.com/en/my/settings/api-management
+
+BINANCE_API_KEY=tu_api_key_aqui
+BINANCE_SECRET_KEY=tu_secret_key_aqui
+TESTNET=true
+RISK_PROFILE=normal
+SYMBOL=BTCUSDT
+```
+
+**⚠️ IMPORTANTE:**
+- **NUNCA** compartas tus API keys
+- **NUNCA** subas el archivo `.env` a git (ya está en .gitignore)
+- Usa **Testnet** para pruebas iniciales
+- Configura permisos de API para Futures Trading solamente
+
+### Paso 3: Primer Arranque en Testnet
+
 ```python
+from main_trading_system import TradingSystem
+import os
+
+# Cargar credenciales desde .env
+from dotenv import load_dotenv
+load_dotenv()
+
+# Crear sistema
 system = TradingSystem(
-    api_key=api_key,
-    api_secret=api_secret,
-    testnet=True,  # False para mainnet
+    api_key=os.getenv("BINANCE_API_KEY"),
+    api_secret=os.getenv("BINANCE_SECRET_KEY"),
+    testnet=True,  # IMPORTANTE: Iniciar con Testnet
     risk_profile="normal",
     symbol="BTCUSDT"
 )
+
+# Inicializar (conecta y reconcilia)
+if system.initialize():
+    print("✅ Sistema inicializado correctamente")
+    status = system.get_system_status()
+    print(f"Balance: ${status['balance']:.2f}")
+    print(f"Circuit Breaker: {status['circuit_breaker']['state']}")
+else:
+    print("❌ Error al inicializar")
 ```
+
+### Testnet vs Mainnet
+
+**Testnet (Recomendado para comenzar):**
+```python
+system = TradingSystem(testnet=True, ...)
+```
+- Base URL: `https://testnet.binancefuture.com`
+- Fondos virtuales
+- Sin riesgo real
+
+**Mainnet (Producción):**
+```python
+system = TradingSystem(testnet=False, ...)
+```
+- Base URL: `https://fapi.binance.com`
+- Fondos reales
+- ⚠️ Solo usar tras validación exhaustiva en Testnet
 
 ## 💻 Uso
 
@@ -476,6 +533,95 @@ system.alert_manager.register_callback(telegram_alert)
 import logging
 logging.getLogger("TradingSystem").setLevel(logging.DEBUG)
 logging.getLogger("CircuitBreaker").setLevel(logging.INFO)
+```
+
+## 🛠️ Resolución de Problemas
+
+### Problema: "index 20 is out of bounds for axis 0 with size 20"
+
+**Causa:**
+Error en estrategia SMC al acceder a índices calculados sin validar longitud de datos.
+
+**Síntoma:**
+```
+[12:40:12] Error en SMC: index 20 is out of bounds for axis 0 with size 20
+```
+
+**Solución Implementada:**
+- Validación explícita de longitud ANTES de cualquier indexación
+- Uso de `safe_index()` y `safe_slice()` para accesos seguros
+- Early return con `signal=0` cuando datos insuficientes
+- Protección con try/except para capturar excepciones inesperadas
+
+**Código Correcto:**
+```python
+# ✅ CORRECTO: Validar antes de indexar
+if len(data) < self.min_bars_required:
+    return StrategySignal(signal=0, confidence=0.0, reasons=["Insufficient data"])
+
+# ✅ CORRECTO: Uso seguro de índices
+i = len(highs) - 1
+if i - 2 < 0:
+    return StrategySignal(signal=0, confidence=0.0, reasons=["Invalid index"])
+```
+
+**Test de Regresión:**
+```bash
+python tests/test_smc_index_error.py
+```
+
+### Problema: "Estrategias válidas: 0/4" tratado como error
+
+**Causa:**
+El motor de confluencia trataba señales con `signal=0` como errores en vez de "no-trade".
+
+**Síntoma:**
+```
+[12:40:12] Estrategias válidas: 0/4
+[12:40:12] Insuficientes estrategias (0 < 2)
+[12:40:12] ❌ ERROR: No se puede operar
+```
+
+**Solución Implementada:**
+- **signal=0 NO es un error**, es un estado normal de "no-trade"
+- Solo cuentan como "válidas" las estrategias con `signal != 0` y `confidence > 0`
+- Logging en nivel `INFO` en vez de `ERROR`
+- El loop continúa sin degradar el circuit breaker
+
+**Comportamiento Correcto:**
+```
+[12:40:12] Confluence evaluation: 0/4 valid strategies
+[12:40:12] Insufficient valid strategies (0 < 2). No-trade decision.
+[12:40:12] ℹ️ INFO: Esperando señales válidas...
+```
+
+### Problema: Órdenes duplicadas tras errores de red
+
+**Causa:**
+Reintentos sin idempotencia generaban múltiples órdenes.
+
+**Solución Implementada:**
+- `clientOrderId` determinístico: `SYM|STRAT|TS|SEQ|HASH`
+- OrderRegistry previene duplicados
+- Reconciliación al arranque detecta órdenes huérfanas
+- Reintentos seguros con `execute_with_retry()`
+
+### Problema: Estado desincronizado al arranque
+
+**Causa:**
+Órdenes/posiciones en Exchange pero no en local (o viceversa).
+
+**Solución Implementada:**
+- Reconciliación completa al arranque
+- Adopta órdenes del exchange si no existen en local
+- Marca como huérfanas órdenes locales no presentes en exchange
+- Log detallado de sincronización
+
+**Verificar Reconciliación:**
+```python
+result = system.connection_manager.reconcile_on_startup("BTCUSDT")
+print(f"Órdenes adoptadas: {result['orders_adopted']}")
+print(f"Órdenes huérfanas: {result['orders_orphaned']}")
 ```
 
 ## 🎯 Checklist de "Hecho-Hecho"
