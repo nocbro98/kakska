@@ -26,38 +26,51 @@ from typing import Dict, Any
 from binance_bot_2 import TradingBot, TradingBotGUI, Config, RiskProfile
 
 
-class LoggerQueueAdapter(queue.Queue):
+class LoggerQueueAdapter:
     """
     Adapter para convertir entre el formato de TradingLogger y ModernTradingGUI.
 
     TradingLogger pone: ('log', {'message': msg, 'level': lvl, ...})
     ModernTradingGUI espera: ('log', (msg, lvl))
+
+    No hereda de Queue, solo actúa como proxy transparente.
     """
 
     def __init__(self, target_queue: queue.Queue):
-        super().__init__()
         self.target_queue = target_queue
 
     def put(self, item, block=True, timeout=None):
         """Override put para adaptar formato"""
-        if isinstance(item, tuple) and len(item) == 2:
-            msg_type, data = item
+        try:
+            if isinstance(item, tuple) and len(item) == 2:
+                msg_type, data = item
 
-            if msg_type == 'log' and isinstance(data, dict):
-                # Convertir de dict a tuple
-                message = data.get('message', '')
-                level = data.get('level', 'INFO')
-                self.target_queue.put(('log', (message, level)), block=block, timeout=timeout)
+                if msg_type == 'log' and isinstance(data, dict):
+                    # Convertir de dict a tuple
+                    message = data.get('message', '')
+                    level = data.get('level', 'INFO')
+                    self.target_queue.put(('log', (message, level)), block=block, timeout=timeout)
+                else:
+                    # Pasar otros mensajes sin modificar
+                    self.target_queue.put(item, block=block, timeout=timeout)
             else:
-                # Pasar otros mensajes sin modificar
+                # Pasar mensajes no reconocidos sin modificar
                 self.target_queue.put(item, block=block, timeout=timeout)
-        else:
-            # Pasar mensajes no reconocidos sin modificar
-            self.target_queue.put(item, block=block, timeout=timeout)
+        except Exception as e:
+            # Silently ignore queue errors to avoid blocking logging
+            pass
 
     def put_nowait(self, item):
         """Override put_nowait para adaptar formato"""
         return self.put(item, block=False)
+
+    def empty(self):
+        """Proxy to target queue"""
+        return self.target_queue.empty()
+
+    def qsize(self):
+        """Proxy to target queue"""
+        return self.target_queue.qsize()
 
 # Importar componentes modernos
 from integration_bridge import ModernComponentsBridge

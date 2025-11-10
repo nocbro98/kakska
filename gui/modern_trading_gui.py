@@ -591,8 +591,8 @@ class ModernTradingGUI:
         # Procesar queue de actualizaciones
         self._process_update_queue()
 
-        # Actualizar cada 1 segundo
-        self.root.after(1000, self._start_periodic_update)
+        # Actualizar cada 100ms para mayor responsividad
+        self.root.after(100, self._start_periodic_update)
 
     def _process_update_queue(self):
         """Procesa queue de actualizaciones desde threads"""

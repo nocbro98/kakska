@@ -2713,10 +2713,13 @@ class MultiStrategyTrader:
         # Verificar y recalibrar IC weights cada 7 días
         self.check_and_recalibrate_ic_weights()
 
+        # Obtener ATR actual para Fibonacci
+        atr = df['atr'].iloc[-1] if 'atr' in df.columns and len(df) > 0 else 0.0
+
         # Ejecutar cada estrategia
         signals = {
             'elliott': self.elliott.analyze(df),
-            'fibonacci': self.fibonacci.analyze(df),
+            'fibonacci': self.fibonacci.analyze(df, atr),  # Pasar ATR a Fibonacci
             'wyckoff': self.wyckoff.analyze(df),
             'smc': self.smc.analyze(df)
         }
