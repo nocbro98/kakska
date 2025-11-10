@@ -11,7 +11,7 @@ Implementa notificaciones reales (no solo logging) para eventos críticos:
 
 import logging
 import os
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
