@@ -19,9 +19,10 @@ import logging
 import time
 from datetime import datetime
 import threading
+from typing import Dict, Any
 
 # Importar bot existente
-from binance_bot_2 import TradingBot, TradingBotGUI, Config
+from binance_bot_2 import TradingBot, TradingBotGUI, Config, RiskProfile
 
 # Importar componentes modernos
 from integration_bridge import ModernComponentsBridge
