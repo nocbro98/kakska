@@ -243,89 +243,84 @@ class IntegratedTradingBot:
         return ", ".join(channels) if channels else "Configured but no channels"
 
     def _patch_trading_loop(self):
-        """Patch el trading loop del bot para agregar funcionalidad moderna"""
+        """Patch el analyze_and_trade del bot para agregar funcionalidad moderna"""
 
-        # Guardar referencia al loop original
-        original_trading_loop = self.legacy_bot.trading_loop
+        # Guardar referencia al método original
+        original_analyze_and_trade = self.legacy_bot.analyze_and_trade
 
-        def patched_trading_loop():
-            """Trading loop con componentes modernos integrados"""
+        # Inicializar timestamp para regime update
+        self._last_regime_update = time.time()
 
-            self.legacy_bot.logger.info("Starting trading loop (patched with modern components)...")
+        def patched_analyze_and_trade():
+            """analyze_and_trade con componentes modernos integrados"""
 
-            while not self.legacy_bot.stop_event.is_set():
-                try:
-                    # ===== CIRCUIT BREAKER CHECK =====
-                    if self.modern_bridge:
-                        can_trade, reason = self.modern_bridge.can_trade()
-                        if not can_trade:
-                            self.legacy_bot.logger.warning(f"⛔ Trading pausado: {reason}")
-                            time.sleep(60)
-                            continue
+            try:
+                # ===== CIRCUIT BREAKER CHECK =====
+                if self.modern_bridge:
+                    can_trade, reason = self.modern_bridge.can_trade()
+                    if not can_trade:
+                        self.legacy_bot.logger.warning(f"⛔ Trading pausado por circuit breaker: {reason}")
+                        return  # No analizar si circuit breaker está activo
 
-                    # ===== RÉGIMEN UPDATE (cada 5 minutos) =====
-                    if self.regime_filter and hasattr(self, '_last_regime_update'):
-                        if (time.time() - self._last_regime_update) > 300:
-                            try:
-                                with self.legacy_bot.market_data_lock:
-                                    if len(self.legacy_bot.market_data) > 0:
-                                        regime = self.regime_filter.update(
-                                            self.legacy_bot.market_data.copy()
-                                        )
-                                        self.regime_filter.log_regime_status(regime)
-                                self._last_regime_update = time.time()
-                            except:
-                                pass
-                    elif self.regime_filter:
-                        self._last_regime_update = time.time()
-
-                    # ===== PYRAMIDING CHECK =====
-                    if (self.pyramiding_manager and
-                        self.legacy_bot.order_manager.current_position_data and
-                        hasattr(Config, 'ALLOW_PYRAMIDING') and Config.ALLOW_PYRAMIDING):
-
+                # ===== RÉGIMEN UPDATE (cada 5 minutos) =====
+                if self.regime_filter:
+                    if (time.time() - self._last_regime_update) > 300:
                         try:
                             with self.legacy_bot.market_data_lock:
                                 if len(self.legacy_bot.market_data) > 0:
-                                    current_price = float(self.legacy_bot.market_data['close'].iloc[-1])
-                                    df_copy = self.legacy_bot.market_data.copy()
-
-                            # Verificar si se puede piramidear
-                            can_add, _ = self.pyramiding_manager.can_add_to_position(
-                                Config.SYMBOL, current_price
-                            )
-
-                            if can_add and len(df_copy) >= 100:
-                                # Analizar señal
-                                signals = self.legacy_bot.trader.analyze_market(df_copy, current_price)
-
-                                position_side = self.legacy_bot.order_manager.current_position_data['side']
-
-                                should_add = False
-                                if position_side == 'BUY' and signals and signals.get('signal') == 1:
-                                    if signals.get('confidence', 0) >= 60:
-                                        should_add = True
-                                elif position_side == 'SELL' and signals and signals.get('signal') == -1:
-                                    if signals.get('confidence', 0) >= 60:
-                                        should_add = True
-
-                                if should_add:
-                                    self._execute_pyramiding(current_price)
-
+                                    regime = self.regime_filter.update(
+                                        self.legacy_bot.market_data.copy()
+                                    )
+                                    self.regime_filter.log_regime_status(regime)
+                            self._last_regime_update = time.time()
                         except Exception as e:
-                            self.legacy_bot.logger.error(f"Error en pyramiding: {e}")
+                            self.legacy_bot.logger.warning(f"Error updating regime: {e}")
 
-                    # Delay entre iteraciones
-                    time.sleep(1)
+                # ===== EJECUTAR ANÁLISIS ORIGINAL =====
+                # Esto ejecuta el análisis completo de las 4 estrategias del bot legacy
+                original_analyze_and_trade()
 
-                except Exception as e:
-                    self.legacy_bot.logger.error(f"Error in trading loop: {e}", exc_info=True)
-                    time.sleep(5)
+                # ===== PYRAMIDING CHECK (después del análisis) =====
+                if (self.pyramiding_manager and
+                    self.legacy_bot.order_manager.current_position_data and
+                    hasattr(Config, 'ALLOW_PYRAMIDING') and Config.ALLOW_PYRAMIDING):
 
-            self.legacy_bot.logger.info("Trading loop terminated")
+                    try:
+                        with self.legacy_bot.market_data_lock:
+                            if len(self.legacy_bot.market_data) > 0:
+                                current_price = float(self.legacy_bot.market_data['close'].iloc[-1])
+                                df_copy = self.legacy_bot.market_data.copy()
 
-        # Reemplazar el loop
-        self.legacy_bot.trading_loop = patched_trading_loop
+                        # Verificar si se puede piramidear
+                        can_add, _ = self.pyramiding_manager.can_add_to_position(
+                            Config.SYMBOL, current_price
+                        )
+
+                        if can_add and len(df_copy) >= 100:
+                            # Analizar señal
+                            signals = self.legacy_bot.trader.analyze_market(df_copy, current_price)
+
+                            position_side = self.legacy_bot.order_manager.current_position_data['side']
+
+                            should_add = False
+                            if position_side == 'BUY' and signals and signals.get('signal') == 1:
+                                if signals.get('confidence', 0) >= 60:
+                                    should_add = True
+                            elif position_side == 'SELL' and signals and signals.get('signal') == -1:
+                                if signals.get('confidence', 0) >= 60:
+                                    should_add = True
+
+                            if should_add:
+                                self._execute_pyramiding(current_price)
+
+                    except Exception as e:
+                        self.legacy_bot.logger.error(f"Error en pyramiding: {e}")
+
+            except Exception as e:
+                self.legacy_bot.logger.error(f"Error in patched analyze_and_trade: {e}", exc_info=True)
+
+        # Reemplazar solo el método analyze_and_trade, NO el trading_loop completo
+        self.legacy_bot.analyze_and_trade = patched_analyze_and_trade
 
     def _execute_pyramiding(self, current_price: float):
         """Ejecutar piramidación"""
