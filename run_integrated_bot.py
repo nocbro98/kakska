@@ -17,12 +17,47 @@ import os
 import argparse
 import logging
 import time
+import queue
 from datetime import datetime
 import threading
 from typing import Dict, Any
 
 # Importar bot existente
 from binance_bot_2 import TradingBot, TradingBotGUI, Config, RiskProfile
+
+
+class LoggerQueueAdapter(queue.Queue):
+    """
+    Adapter para convertir entre el formato de TradingLogger y ModernTradingGUI.
+
+    TradingLogger pone: ('log', {'message': msg, 'level': lvl, ...})
+    ModernTradingGUI espera: ('log', (msg, lvl))
+    """
+
+    def __init__(self, target_queue: queue.Queue):
+        super().__init__()
+        self.target_queue = target_queue
+
+    def put(self, item, block=True, timeout=None):
+        """Override put para adaptar formato"""
+        if isinstance(item, tuple) and len(item) == 2:
+            msg_type, data = item
+
+            if msg_type == 'log' and isinstance(data, dict):
+                # Convertir de dict a tuple
+                message = data.get('message', '')
+                level = data.get('level', 'INFO')
+                self.target_queue.put(('log', (message, level)), block=block, timeout=timeout)
+            else:
+                # Pasar otros mensajes sin modificar
+                self.target_queue.put(item, block=block, timeout=timeout)
+        else:
+            # Pasar mensajes no reconocidos sin modificar
+            self.target_queue.put(item, block=block, timeout=timeout)
+
+    def put_nowait(self, item):
+        """Override put_nowait para adaptar formato"""
+        return self.put(item, block=False)
 
 # Importar componentes modernos
 from integration_bridge import ModernComponentsBridge
@@ -546,9 +581,10 @@ class IntegratedTradingBot:
             update_config_callback=self.update_config
         )
 
-        # Conectar logger
-        if self.legacy_bot:
-            self.legacy_bot.logger_system.set_gui_callback(gui.log_message)
+        # Conectar logger con adapter de formato
+        if self.legacy_bot and hasattr(self.legacy_bot, 'logger_system'):
+            adapter_queue = LoggerQueueAdapter(gui.update_queue)
+            self.legacy_bot.logger_system.set_gui_queue(adapter_queue)
 
         # Ejecutar
         gui.run()
