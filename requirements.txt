@@ -1,14 +1,14 @@
 # Trading System Requirements
 
 # ==========================================
-# Binance API - CRÍTICO: Solo python-binance
+# Binance API - CRITICO: Solo python-binance
 # ==========================================
 # Este sistema requiere EXCLUSIVAMENTE python-binance==1.0.19
 #
-# ⚠️ NO INSTALAR binance-connector:
-#   - binance-connector expone un módulo 'binance' que shadow python-binance
+# WARNING: NO INSTALAR binance-connector
+#   - binance-connector expone un modulo 'binance' que shadow python-binance
 #   - Ambos paquetes no pueden coexistir (namespace collision)
-#   - ThreadedWebsocketManager solo está disponible en python-binance
+#   - ThreadedWebsocketManager solo esta disponible en python-binance
 #   - binance_bot_2.py aborta con ImportError descriptivo si detecta conflicto
 #
 # Si ya tienes binance-connector instalado:
