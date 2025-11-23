@@ -83,12 +83,37 @@ def create_bot_patches(original_class, ui_queue: Optional[Queue] = None):
                     except:
                         current_balance = 0.0
 
-                # Posición actual
+                # Posición actual y cálculo de PnL en tiempo real
                 current_position = None
                 unrealized_pnl = 0.0
                 if hasattr(self, 'order_manager') and self.order_manager.current_position_data:
                     current_position = self.order_manager.current_position_data
-                    unrealized_pnl = current_position.get('unrealized_pnl', 0.0)
+
+                    # Calcular unrealized_pnl en tiempo real
+                    try:
+                        entry_price = float(current_position.get('entry_price', 0))
+                        quantity = float(current_position.get('quantity', 0))
+                        side = current_position.get('side', '')
+
+                        # Obtener precio actual desde market_data
+                        current_price = 0.0
+                        if hasattr(self, 'market_data') and hasattr(self, 'market_data_lock'):
+                            with self.market_data_lock:
+                                if self.market_data is not None and len(self.market_data) > 0:
+                                    if 'close' in self.market_data.columns:
+                                        current_price = float(self.market_data['close'].iloc[-1])
+
+                        # Calcular PnL si tenemos precio actual
+                        if current_price > 0 and entry_price > 0 and quantity > 0:
+                            if side == 'BUY':
+                                # Long position: profit when price goes up
+                                unrealized_pnl = (current_price - entry_price) * quantity
+                            elif side == 'SELL':
+                                # Short position: profit when price goes down
+                                unrealized_pnl = (entry_price - current_price) * quantity
+                    except Exception as e:
+                        # Si falla el cálculo, mantener PnL en 0
+                        pass
 
                 # Estado de conexión
                 is_connected = getattr(self, 'is_running', False)
