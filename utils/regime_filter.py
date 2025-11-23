@@ -297,7 +297,7 @@ class RegimeFilter:
             'bb_width_percentile': regime.bb_width_percentile,
             'recommended_strategies': recommended,
             'position_size_multiplier': size_mult,
-            'timestamp': regime.timestamp
+            'timestamp': regime.ts_updated
         }
 
         return summary
