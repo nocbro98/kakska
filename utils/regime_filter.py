@@ -79,7 +79,13 @@ class RegimeFilter:
         Returns:
             MarketRegime detectado
         """
-        regime = self.detector.detect_regime(df)
+        # Extraer arrays de precios del dataframe
+        closes = df['close'].to_numpy()
+        highs = df['high'].to_numpy()
+        lows = df['low'].to_numpy()
+
+        # Detectar régimen con los arrays separados
+        regime = self.detector.detect_regime(closes, highs, lows)
 
         self.logger.debug(
             f"[REGIME] {regime.trend_type.value} "
