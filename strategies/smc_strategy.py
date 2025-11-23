@@ -20,9 +20,11 @@ Solución implementada:
 
 import logging
 import numpy as np
-from typing import Tuple, List
+import pandas as pd
+from typing import Tuple, List, Optional
 from strategies.base_strategy import BaseStrategy
 from core.confluence_engine import StrategySignal
+from utils.vsa_analyzer import VolumeSpreadAnalysis, VSASignal
 
 
 class SMCStrategy(BaseStrategy):
@@ -41,12 +43,16 @@ class SMCStrategy(BaseStrategy):
     def __init__(
         self,
         swing_length: int = 10,
-        fvg_threshold: float = 0.001
+        fvg_threshold: float = 0.001,
+        enable_vsa: bool = True,
+        enable_kaufman_filter: bool = True
     ):
         """
         Args:
             swing_length: Longitud para detectar swings
             fvg_threshold: Umbral mínimo para FVG (% del precio)
+            enable_vsa: Habilitar validación VSA (Wyckoff)
+            enable_kaufman_filter: Habilitar filtro de eficiencia Kaufman
         """
         # Calcular mínimo de barras requeridas
         # Necesitamos al menos: swing_length * 2 + buffer
@@ -56,11 +62,23 @@ class SMCStrategy(BaseStrategy):
 
         self.swing_length = swing_length
         self.fvg_threshold = fvg_threshold
+        self.enable_vsa = enable_vsa
+        self.enable_kaufman_filter = enable_kaufman_filter
+
+        # Inicializar VSA analyzer
+        if self.enable_vsa:
+            self.vsa_analyzer = VolumeSpreadAnalysis()
+            self.logger.info("VSA validation enabled")
+        else:
+            self.vsa_analyzer = None
+            self.logger.info("VSA validation disabled")
 
         self.logger.info(
             f"SMC Strategy initialized: "
             f"swing_length={swing_length}, "
-            f"min_bars_required={self.min_bars_required}"
+            f"min_bars_required={self.min_bars_required}, "
+            f"vsa_enabled={enable_vsa}, "
+            f"kaufman_filter={enable_kaufman_filter}"
         )
 
     def analyze(
@@ -88,21 +106,16 @@ class SMCStrategy(BaseStrategy):
             )
 
         try:
-            # 2. Detectar estructura de mercado
+            # 2. CAPA SMC (Señales base)
             structure_signal, structure_reasons = self._detect_structure(highs, lows, closes)
-
-            # 3. Detectar order blocks
             ob_signal, ob_reasons = self._detect_order_blocks(highs, lows, closes, opens)
-
-            # 4. Detectar Fair Value Gaps
             fvg_signal, fvg_reasons = self._detect_fair_value_gaps(highs, lows)
 
-            # 5. Combinar señales
-            signals = [structure_signal, ob_signal, fvg_signal]
-            valid_signals = [s for s in signals if s != 0]
+            # Combinar señales SMC
+            smc_signals = [structure_signal, ob_signal, fvg_signal]
+            valid_smc_signals = [s for s in smc_signals if s != 0]
 
-            if not valid_signals:
-                # No hay señales válidas
+            if not valid_smc_signals:
                 return StrategySignal(
                     name=self.name,
                     signal=0,
@@ -110,27 +123,92 @@ class SMCStrategy(BaseStrategy):
                     reasons=["No valid SMC patterns detected"]
                 )
 
-            # Señal por mayoría
-            avg_signal = np.mean(valid_signals)
-
-            if avg_signal > 0.3:
-                final_signal = 1
-            elif avg_signal < -0.3:
-                final_signal = -1
+            # Señal SMC por mayoría
+            avg_smc_signal = np.mean(valid_smc_signals)
+            if avg_smc_signal > 0.3:
+                smc_signal = 1
+            elif avg_smc_signal < -0.3:
+                smc_signal = -1
             else:
-                final_signal = 0
+                smc_signal = 0
 
-            # Confianza basada en número de confirmaciones
-            confidence = len(valid_signals) / 3.0
+            if smc_signal == 0:
+                return StrategySignal(
+                    name=self.name,
+                    signal=0,
+                    confidence=0.0,
+                    reasons=["SMC signals conflicting"]
+                )
 
-            # Agregar razones
+            # Confianza base
+            base_confidence = len(valid_smc_signals) / 3.0 * 100
             all_reasons = structure_reasons + ob_reasons + fvg_reasons
+
+            # 3. CAPA WYCKOFF (Validación VSA)
+            vsa_valid = True
+            vsa_signal_type = VSASignal.NORMAL
+            vsa_confidence = 0.0
+
+            if self.enable_vsa and self.vsa_analyzer and volumes is not None:
+                vsa_analysis = self._validate_with_vsa(
+                    closes, highs, lows, opens, volumes, smc_signal
+                )
+                vsa_valid = vsa_analysis['is_valid']
+                vsa_signal_type = vsa_analysis['signal']
+                vsa_confidence = vsa_analysis['confidence']
+
+                if vsa_valid:
+                    all_reasons.append(f"VSA: {vsa_signal_type.value} (conf={vsa_confidence:.1f}%)")
+                    base_confidence += vsa_confidence * 0.2  # Boost 20%
+                else:
+                    all_reasons.append(f"VSA: {vsa_analysis['reason']}")
+                    base_confidence *= 0.5  # Penalizar 50%
+
+            # 4. CAPA ELLIOTT/KAUFMAN (Contexto de Tendencia)
+            kaufman_valid = True
+            kaufman_trend = "UNKNOWN"
+
+            if self.enable_kaufman_filter:
+                kaufman_analysis = self._validate_with_kaufman(closes, smc_signal)
+                kaufman_valid = kaufman_analysis['is_valid']
+                kaufman_trend = kaufman_analysis['trend']
+
+                if kaufman_valid:
+                    all_reasons.append(f"Kaufman: {kaufman_trend} trend")
+                    base_confidence *= 1.1  # Boost 10%
+                else:
+                    all_reasons.append(f"Kaufman: {kaufman_analysis['reason']}")
+                    base_confidence *= 0.7  # Penalizar 30%
+
+            # 5. CONFLUENCIA FINAL
+            if not vsa_valid and self.enable_vsa:
+                return StrategySignal(
+                    name=self.name,
+                    signal=0,
+                    confidence=0.0,
+                    reasons=["VSA validation failed"] + all_reasons[:2]
+                )
+
+            if not kaufman_valid and self.enable_kaufman_filter:
+                return StrategySignal(
+                    name=self.name,
+                    signal=0,
+                    confidence=0.0,
+                    reasons=["Market efficiency too low"] + all_reasons[:2]
+                )
+
+            # Señal final
+            final_confidence = min(100.0, base_confidence)
+
+            # Clasificar tipo de entrada según confluencia
+            signal_strength = "STRONG" if final_confidence >= 70 else "SCALP"
+            all_reasons.insert(0, f"{signal_strength} signal with {len(valid_smc_signals)}/3 SMC confirmations")
 
             return StrategySignal(
                 name=self.name,
-                signal=final_signal,
-                confidence=confidence,
-                reasons=all_reasons[:3]  # Top 3 razones
+                signal=smc_signal,
+                confidence=final_confidence / 100.0,
+                reasons=all_reasons[:4]  # Top 4 razones
             )
 
         except Exception as e:
@@ -362,3 +440,193 @@ class SMCStrategy(BaseStrategy):
                 swing_lows.append(current)
 
         return swing_lows
+
+    # ===== VSA AND KAUFMAN VALIDATION METHODS =====
+
+    def _validate_with_vsa(
+        self,
+        closes: np.ndarray,
+        highs: np.ndarray,
+        lows: np.ndarray,
+        opens: np.ndarray,
+        volumes: np.ndarray,
+        smc_signal: int
+    ) -> dict:
+        """
+        Valida señal SMC con VSA (Wyckoff Volume Spread Analysis)
+
+        Args:
+            closes, highs, lows, opens, volumes: Arrays de datos
+            smc_signal: Señal SMC (1 = long, -1 = short)
+
+        Returns:
+            dict con: is_valid, signal, confidence, reason
+        """
+        try:
+            # Crear DataFrame para VSA
+            df = pd.DataFrame({
+                'open': opens,
+                'high': highs,
+                'low': lows,
+                'close': closes,
+                'volume': volumes
+            })
+
+            # Analizar última vela
+            current_candle = df.iloc[-1]
+            vsa_analysis = self.vsa_analyzer.analyze_candle(current_candle, df)
+
+            # Validar según dirección de señal SMC
+            if smc_signal == 1:  # LONG
+                # Señales VSA alcistas válidas
+                bullish_signals = [
+                    VSASignal.ABSORPTION_BUY,
+                    VSASignal.NO_SUPPLY,
+                    VSASignal.CLIMAX_SELL  # Clímax de venta puede ser reversión alcista
+                ]
+
+                if vsa_analysis.signal in bullish_signals:
+                    return {
+                        'is_valid': True,
+                        'signal': vsa_analysis.signal,
+                        'confidence': vsa_analysis.confidence,
+                        'reason': f"VSA confirms LONG: {vsa_analysis.signal.value}"
+                    }
+                elif vsa_analysis.signal == VSASignal.NORMAL:
+                    # Neutral es aceptable (no contradice)
+                    return {
+                        'is_valid': True,
+                        'signal': vsa_analysis.signal,
+                        'confidence': 50.0,
+                        'reason': "VSA neutral (no contradiction)"
+                    }
+                else:
+                    # Señal contradictoria
+                    return {
+                        'is_valid': False,
+                        'signal': vsa_analysis.signal,
+                        'confidence': 0.0,
+                        'reason': f"VSA contradicts LONG: {vsa_analysis.signal.value}"
+                    }
+
+            elif smc_signal == -1:  # SHORT
+                # Señales VSA bajistas válidas
+                bearish_signals = [
+                    VSASignal.ABSORPTION_SELL,
+                    VSASignal.NO_DEMAND,
+                    VSASignal.CLIMAX_BUY  # Clímax de compra puede ser reversión bajista
+                ]
+
+                if vsa_analysis.signal in bearish_signals:
+                    return {
+                        'is_valid': True,
+                        'signal': vsa_analysis.signal,
+                        'confidence': vsa_analysis.confidence,
+                        'reason': f"VSA confirms SHORT: {vsa_analysis.signal.value}"
+                    }
+                elif vsa_analysis.signal == VSASignal.NORMAL:
+                    return {
+                        'is_valid': True,
+                        'signal': vsa_analysis.signal,
+                        'confidence': 50.0,
+                        'reason': "VSA neutral (no contradiction)"
+                    }
+                else:
+                    return {
+                        'is_valid': False,
+                        'signal': vsa_analysis.signal,
+                        'confidence': 0.0,
+                        'reason': f"VSA contradicts SHORT: {vsa_analysis.signal.value}"
+                    }
+
+            return {
+                'is_valid': True,
+                'signal': VSASignal.NORMAL,
+                'confidence': 0.0,
+                'reason': "No VSA signal"
+            }
+
+        except Exception as e:
+            self.logger.warning(f"VSA validation error: {e}")
+            # En caso de error, no bloquear la señal
+            return {
+                'is_valid': True,
+                'signal': VSASignal.NORMAL,
+                'confidence': 0.0,
+                'reason': f"VSA error: {str(e)}"
+            }
+
+    def _validate_with_kaufman(
+        self,
+        closes: np.ndarray,
+        smc_signal: int
+    ) -> dict:
+        """
+        Valida señal SMC con filtro de eficiencia Kaufman
+
+        Según Kaufman: ER < 0.30 indica mercado en ruido,
+        no operar estrategias tendenciales.
+
+        Args:
+            closes: Array de precios de cierre
+            smc_signal: Señal SMC (1 = long, -1 = short)
+
+        Returns:
+            dict con: is_valid, trend, reason
+        """
+        try:
+            # Verificar contexto de tendencia válido
+            is_valid, reason = self._is_valid_trend_context(closes, min_efficiency=0.25)
+
+            if not is_valid:
+                return {
+                    'is_valid': False,
+                    'trend': 'NOISE',
+                    'reason': reason
+                }
+
+            # Obtener dirección de tendencia
+            kama_trend = self._calculate_kama_trend(closes)
+
+            # Validar consistencia con señal SMC
+            if smc_signal == 1 and kama_trend == 'DOWN':
+                return {
+                    'is_valid': False,
+                    'trend': kama_trend,
+                    'reason': "KAMA shows DOWN trend but SMC signals LONG"
+                }
+
+            elif smc_signal == -1 and kama_trend == 'UP':
+                return {
+                    'is_valid': False,
+                    'trend': kama_trend,
+                    'reason': "KAMA shows UP trend but SMC signals SHORT"
+                }
+
+            # Detectar divergencia Elliott Wave 5 (reversión)
+            is_divergence, div_confidence, div_reason = self._detect_elliott_wave_5_divergence(closes)
+
+            if is_divergence:
+                # Divergencia detectada - posible reversión
+                # Esto es válido si SMC señala en dirección de la reversión
+                return {
+                    'is_valid': True,
+                    'trend': f"{kama_trend}_REVERSAL",
+                    'reason': f"Elliott Wave 5 divergence: {div_reason}"
+                }
+
+            # Contexto válido y consistente
+            return {
+                'is_valid': True,
+                'trend': kama_trend,
+                'reason': f"Valid {kama_trend} trend context"
+            }
+
+        except Exception as e:
+            self.logger.warning(f"Kaufman validation error: {e}")
+            # En caso de error, no bloquear la señal
+            return {
+                'is_valid': True,
+                'trend': 'UNKNOWN',
+                'reason': f"Kaufman error: {str(e)}"
+            }
