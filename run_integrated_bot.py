@@ -25,6 +25,9 @@ from typing import Dict, Any
 # Importar bot existente
 from binance_bot_2 import TradingBot, TradingBotGUI, Config, RiskProfile
 
+# Importar sistema de monkey patching
+from integration_patches import create_bot_patches, apply_patches_to_bot_instance
+
 
 class LoggerQueueAdapter:
     """
@@ -574,14 +577,9 @@ class IntegratedTradingBot:
             return False
 
     def run_with_gui(self):
-        """Ejecutar con GUI moderna"""
+        """Ejecutar con GUI moderna con telemetría en tiempo real"""
 
-        # Inicializar componentes
-        if not self.initialize():
-            print("Failed to initialize")
-            return
-
-        # Crear GUI con callback de configuración
+        # ===== 1. CREAR GUI PRIMERO (para obtener ui_queue) =====
         gui = ModernTradingGUI(
             start_callback=self.start,
             stop_callback=self.stop,
@@ -589,12 +587,27 @@ class IntegratedTradingBot:
             update_config_callback=self.update_config
         )
 
-        # Conectar logger con adapter de formato
+        # ===== 2. APLICAR MONKEY PATCHING A LA CLASE TradingBot =====
+        # CRÍTICO: Aplicar ANTES de crear la instancia del bot
+        print("\n[DEBUG] Aplicando monkey patches a TradingBot...")
+        TradingBotPatched = create_bot_patches(TradingBot, ui_queue=gui.update_queue)
+
+        # Reemplazar la clase global temporalmente para que initialize() use la versión parcheada
+        import binance_bot_2
+        binance_bot_2.TradingBot = TradingBotPatched
+
+        # ===== 3. INICIALIZAR COMPONENTES (ahora con bot parcheado) =====
+        if not self.initialize():
+            print("Failed to initialize")
+            return
+
+        # ===== 4. CONECTAR LOGGER CON ADAPTER DE FORMATO =====
         if self.legacy_bot and hasattr(self.legacy_bot, 'logger_system'):
             adapter_queue = LoggerQueueAdapter(gui.update_queue)
             self.legacy_bot.logger_system.set_gui_queue(adapter_queue)
 
-        # Ejecutar
+        # ===== 5. EJECUTAR GUI =====
+        # El health_check del bot ahora enviará eventos automáticamente a gui.update_queue
         gui.run()
 
     def run_headless(self):

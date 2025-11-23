@@ -595,28 +595,74 @@ class ModernTradingGUI:
         self.root.after(100, self._start_periodic_update)
 
     def _process_update_queue(self):
-        """Procesa queue de actualizaciones desde threads"""
+        """Procesa queue de actualizaciones desde threads (soporta formato tuple y dict)"""
 
         while not self.update_queue.empty():
             try:
-                update_type, data = self.update_queue.get_nowait()
+                item = self.update_queue.get_nowait()
 
-                if update_type == 'state':
-                    self.state = data
-                    self._update_button_states()
+                # Manejar formato antiguo (tuple) y nuevo (dict del monkey patching)
+                if isinstance(item, dict):
+                    # Nuevo formato del monkey patching: {'type': 'status', 'data': ...}
+                    update_type = item.get('type')
+                    data = item.get('data')
 
-                elif update_type == 'log':
-                    message, level = data
-                    self.log_message(message, level)
+                    if update_type == 'status':
+                        # Actualizar indicador de conexión
+                        if data == 'running':
+                            self.widgets['bot_status_label'].config(text="🟢 Running", foreground="green")
+                        else:
+                            self.widgets['bot_status_label'].config(text="🔴 Stopped", foreground="red")
 
-                elif update_type == 'status':
-                    self._update_status_display(data)
+                    elif update_type == 'balance':
+                        # Actualizar balance y PnL
+                        if isinstance(data, dict):
+                            balance = data.get('available_balance', 0.0)
+                            self.widgets['balance_label'].config(text=f"${balance:.2f}")
 
-                elif update_type == 'error':
-                    messagebox.showerror("Error", data)
+                            unrealized_pnl = data.get('unrealized_pnl', 0.0)
+                            if unrealized_pnl != 0:
+                                color = "green" if unrealized_pnl > 0 else "red"
+                                self.widgets['pnl_label'].config(
+                                    text=f"${unrealized_pnl:.2f}",
+                                    foreground=color
+                                )
+
+                    elif update_type == 'position':
+                        # Actualizar información de posición
+                        if isinstance(data, dict):
+                            side = data.get('side', 'N/A')
+                            quantity = data.get('quantity', 0)
+                            entry_price = data.get('entry_price', 0)
+
+                            position_text = f"{side} {quantity:.3f} @ ${entry_price:.2f}"
+                            if 'position_label' in self.widgets:
+                                self.widgets['position_label'].config(text=position_text)
+
+                elif isinstance(item, tuple):
+                    # Formato antiguo: ('state', data) o ('log', (msg, level))
+                    update_type, data = item
+
+                    if update_type == 'state':
+                        self.state = data
+                        self._update_button_states()
+
+                    elif update_type == 'log':
+                        message, level = data
+                        self.log_message(message, level)
+
+                    elif update_type == 'status':
+                        self._update_status_display(data)
+
+                    elif update_type == 'error':
+                        messagebox.showerror("Error", data)
 
             except queue.Empty:
                 break
+            except Exception as e:
+                # Silent error handling para no romper el loop de UI
+                import traceback
+                traceback.print_exc()
 
     def _update_status_display(self, status: Dict):
         """Actualiza display de estado"""
